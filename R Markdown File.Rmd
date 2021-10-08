@@ -1,0 +1,170 @@
+---
+title: "Raven Analytics Team"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+```{r}
+#Read CSV files into R.
+read.csv("https://raw.githubusercontent.com/suarezmr/Raven-Analytics-Practicum/main/flinfo2021.csv")
+```
+
+```{r}
+#Turn CSV into data frame
+FL2021 <- read.csv("https://raw.githubusercontent.com/suarezmr/Raven-Analytics-Practicum/main/flinfo2021.csv")
+summary(FL2021)
+```
+
+```{r}
+#Import libraries to be used
+library(car)
+library(psych)
+library(ggplot2)
+library(lmtest)
+library(nortest)
+library(dplyr)
+library(rvest)
+library(readxl)
+library(stringr)
+library(interactions)
+```
+
+```{r}
+#Column number sequence vector
+colNum <- (seq_len(ncol(FL2021)))
+#Turn column vector into a data frame.
+names_df <- as.data.frame(colNum)
+#Add column Name column to names_df data frame.
+names_df$colname <- (colnames(FL2021))
+#Add variable type to names_df data frame as a column.
+names_df$type <- (sapply(FL2021, class))
+View(names_df)
+#Change variable types as needed.
+FL2021$population <- as.numeric(FL2021$population)
+FL2021$Deaths <- as.numeric(FL2021$Deaths)
+#Change column names as needed.
+FL2021 <- FL2021 %>% rename(County = Admin2)
+View(FL2021)
+```
+
+```{r}
+#scraping the median household income for each of the florida counties. Data is from the
+#2010 United States Census Data and the 2006-2010 American Community Survey 5-Year Estimates
+
+#saving the URL#
+
+fl_income_URL <- "https://en.wikipedia.org/wiki/List_of_Florida_locations_by_per_capita_income"
+
+#extracting the HTML contents of the page into an object with the read_html function
+
+fl_income_html <- read_html(fl_income_URL)
+
+#extracting all elements that have the HTML tag "table"
+
+html_nodes(fl_income_html, "table")
+
+#the income table is a table of class wikitable. Selecting this source with html node:
+
+flincome_html <- html_node(fl_income_html, ".wikitable")
+
+#converting to a data frame#
+
+flincome_table <- html_table(flincome_html)
+
+#we can see that we need to change some variables, including their type
+print(flincome_table)
+
+#we just need the county and median income columns, thus let's exclude the other columns#
+
+flincome_table <- flincome_table[, -1]
+flincome_table <- flincome_table[, -2]
+flincome_table <- flincome_table[, -3:-5]
+
+#renaming the column of median income
+
+colnames(flincome_table) <- c("County", "medianincome")
+
+flincome_table$medianincome <- as.character((gsub("[\\$]", "", flincome_table$medianincome)))
+flincome_table$medianincome <- as.character((gsub(",", "", flincome_table$medianincome)))
+flincome_table$medianincome <- as.numeric(flincome_table$medianincome)
+
+#merging everything - inner join because county names are all consistent!
+
+FL2021 <- inner_join(FL2021, flincome_table, by = "County")
+
+```
+
+```{r}
+#adding variables from the Behavioral Risk Factor Surveillance System 
+#(http://www.floridahealth.gov/statistics-and-data/survey-data/behavioral-risk-factor-surveillance-system/index1.html)
+#data could only be download individually. data were joined and then uploaded to github
+
+#reading the data and adjusting column names
+
+brfss <- read.csv("https://raw.githubusercontent.com/suarezmr/Raven-Analytics-Practicum/main/BRFSS.csv")
+brfss <- brfss[-68, ]
+colnames(brfss) <- c("County", "Overweight", "Obese", "Asthma", "Pulmonary", "HealthCare", "FluShot", "Sedentary")
+head(brfss)
+
+FL2021 <- inner_join(FL2021, brfss, by = "County")
+
+#adding data: Projections of Florida Population by County, 2025–2045, with Estimates for 2020 https://www.bebr.ufl.edu/population/data#
+
+popinfo <- read.csv("https://raw.githubusercontent.com/suarezmr/Raven-Analytics-Practicum/main/popinfo.csv")
+head(popinfo)
+colnames(popinfo) <- c("County", "Aged65More", "Men")
+str(popinfo)
+
+#all fine except that there's an additional row for the entire state and everything is uppercase#
+
+popinfo <- popinfo[-68, ]
+popinfo
+
+#cleaning and fixing the county names
+popinfo$County = as.character(gsub("\\*", "", popinfo$County))
+
+popinfo$County <- str_to_title(popinfo$County)
+
+popinfo$County[popinfo$County == "Desoto"] <-"DeSoto"
+
+FL2021 <- full_join(FL2021, popinfo)
+
+head(FL2021)
+
+```
+
+```{r}
+
+#running some models#
+
+model1 <- lm(lethality ~ medianincome + Aged65More + Men + Men*Aged65More, data=FL2021)
+summary(model1)
+
+model2 <- lm(lethality ~ medianincome + Obese + Pulmonary + Men + Men*Obese, data=FL2021)
+summary(model2)
+
+model3 <- lm(lethality ~ medianincome + Obese + Pulmonary + Aged65More + Aged65More*Obese, data=FL2021)
+summary(model3)
+
+#model 1 accounts for the fact that the coronavirus is most deadly if you are OLDER AND MALE
+#https://www.nature.com/articles/d41586-020-02483-2#
+
+#model 1 has an adjusted R squared of .53, which is quite high. Further, this was achieved with only 3 variables and an interaction term.
+#hence, this is a great model - albeit intuitive - to predict COVID-19 deaths: counties with lower median incomes, with more men, and with more older people
+#are more likely to have greater lethality. some ethnic variables are correlated with COVID-19 deaths, but they are also correlated with median income
+#thus median income is a very good predictor. Surprisingly, the health-related variables (which are sample-based) weren't that good. 
+
+```
+
+```{r}
+
+#visualizing model 1#
+head(FL2021)
+FL2021X <- FL2021[, -1:-13]
+FL2021X <- FL2021X[, -3:-9]
+
+pairs.panels(FL2021X, method = "pearson",
+             hist.col = "red",
+             density = TRUE, ellipses = TRUE)
+
+```
